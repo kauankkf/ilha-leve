@@ -26,8 +26,8 @@ public class MainActivity extends Activity {
         root.setPadding(dp(20), dp(20), dp(20), dp(20));
 
         TextView info = new TextView(this);
-        info.setText("Ilha Leve\nSegue os 3 passos abaixo. O app não usa nada em segundo plano "
-                + "além do serviço de notificações do próprio Android.");
+        info.setText("Ilha Leve\nSiga os 3 passos. Os ajustes abaixo valem na próxima vez que a ilha aparecer "
+                + "(ou ao tocar em Testar).");
         root.addView(info);
 
         root.addView(btn("1. Permitir exibir sobre outros apps", v -> startActivity(
@@ -39,10 +39,10 @@ public class MainActivity extends Activity {
                 new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
                         Uri.parse("package:" + getPackageName())))));
 
-        root.addView(label("Posição vertical"));
-        root.addView(seek("y", 0, 80, 8));
-        root.addView(label("Largura"));
-        root.addView(seek("w", 160, 360, 260));
+        addSeek(root, "Posição vertical", "y", 0, 80, 8);
+        addSeek(root, "Tamanho da câmera (bolinha inicial)", "cam", 16, 48, 26);
+        addSeek(root, "Largura da forma compacta", "cw", 100, 220, 150);
+        addSeek(root, "Largura da forma expandida", "w", 240, 360, 300);
 
         root.addView(btn("Testar ilha", v -> {
             if (!Settings.canDrawOverlays(this)) {
@@ -50,7 +50,7 @@ public class MainActivity extends Activity {
             } else if (IslandService.instance == null) {
                 toast("Falta o passo 2");
             } else {
-                IslandService.instance.show("Ilha Leve", "Funcionando!", null);
+                IslandService.instance.showTest();
             }
         }));
 
@@ -59,33 +59,34 @@ public class MainActivity extends Activity {
         setContentView(sv);
     }
 
+    private void addSeek(LinearLayout root, final String name, final String key,
+                         final int lo, int hi, int def) {
+        final TextView label = new TextView(this);
+        label.setPadding(0, dp(16), 0, 0);
+        int cur = p.getInt(key, def);
+        label.setText(name + ": " + cur + " dp");
+        root.addView(label);
+
+        SeekBar s = new SeekBar(this);
+        s.setMax(hi - lo);
+        s.setProgress(cur - lo);
+        s.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar sb, int pr, boolean user) {
+                p.edit().putInt(key, pr + lo).apply();
+                label.setText(name + ": " + (pr + lo) + " dp");
+            }
+            @Override public void onStartTrackingTouch(SeekBar sb) { }
+            @Override public void onStopTrackingTouch(SeekBar sb) { }
+        });
+        root.addView(s);
+    }
+
     private Button btn(String t, View.OnClickListener l) {
         Button x = new Button(this);
         x.setText(t);
         x.setAllCaps(false);
         x.setOnClickListener(l);
         return x;
-    }
-
-    private TextView label(String t) {
-        TextView x = new TextView(this);
-        x.setText(t);
-        x.setPadding(0, dp(16), 0, 0);
-        return x;
-    }
-
-    private SeekBar seek(final String key, final int lo, int hi, int def) {
-        SeekBar s = new SeekBar(this);
-        s.setMax(hi - lo);
-        s.setProgress(p.getInt(key, def) - lo);
-        s.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override public void onProgressChanged(SeekBar sb, int pr, boolean user) {
-                p.edit().putInt(key, pr + lo).apply();
-            }
-            @Override public void onStartTrackingTouch(SeekBar sb) { }
-            @Override public void onStopTrackingTouch(SeekBar sb) { }
-        });
-        return s;
     }
 
     private void toast(String m) { Toast.makeText(this, m, Toast.LENGTH_SHORT).show(); }
