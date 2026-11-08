@@ -10,7 +10,7 @@ import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.TextView;
 
-/** Quadradinho/bolinha com capa ou ícone; se não houver imagem, mostra um emoji. */
+/** Capa/ícone com cantos arredondados; sem imagem, mostra uma letra ou emoji. */
 final class IconSlot extends FrameLayout {
     private final ImageView img;
     private final TextView glyph;
@@ -34,6 +34,8 @@ final class IconSlot extends FrameLayout {
         });
         setClipToOutline(true);
     }
+
+    void setBg(int color) { setBackgroundColor(color); }
 
     void set(Drawable d, String g) {
         if (d != null) {

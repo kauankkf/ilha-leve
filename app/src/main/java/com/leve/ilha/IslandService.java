@@ -5,6 +5,7 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.drawable.BitmapDrawable;
+import android.graphics.drawable.Icon;
 import android.media.MediaMetadata;
 import android.media.session.MediaController;
 import android.media.session.MediaSessionManager;
@@ -21,18 +22,19 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * Cérebro da ilha: lê notificações e sessões de mídia e decide o que mostrar.
- * Prioridade fixa: ligação > timer/cronômetro > música. Notificações comuns
- * aparecem expandidas por alguns segundos por cima de tudo.
+ * Cérebro da ilha. Itens ativos: ligação, timer e música. O principal aparece na pílula,
+ * o segundo vira a bolinha ao lado; tocar na bolinha troca os dois. Notificações comuns
+ * aparecem como cartão por alguns segundos.
  */
 public class IslandService extends NotificationListenerService {
     static IslandService instance;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private IslandView view;
-    private Content toast, call, timer, media, shown;
+    private Content toast, call, timer, media, shownPrimary, shownSecondary;
     private String callKey, timerKey;
     private boolean userExpanded;
+    private int forced = -1;
 
     private MediaSessionManager msm;
     private MediaController mc;
@@ -41,8 +43,10 @@ public class IslandService extends NotificationListenerService {
     private final Runnable collapseTask = () -> { userExpanded = false; render(); };
     private final Runnable tick = new Runnable() {
         @Override public void run() {
-            if (view == null || shown == null) return;
-            view.setTime(timeText(shown));
+            Content p = shownPrimary;
+            if (view == null || p == null) return;
+            if (p.type == Content.CALL || p.type == Content.TIMER) view.setTime(timeText(p));
+            else if (p.type == Content.MEDIA) view.updateProgress();
             handler.postDelayed(this, 1000);
         }
     };
@@ -80,9 +84,7 @@ public class IslandService extends NotificationListenerService {
         } catch (Exception ignored) { }
     }
 
-    @Override public void onListenerDisconnected() {
-        cleanup();
-    }
+    @Override public void onListenerDisconnected() { cleanup(); }
 
     @Override public void onDestroy() {
         cleanup();
@@ -102,16 +104,15 @@ public class IslandService extends NotificationListenerService {
             view.destroy();
             view = null;
         }
-        toast = call = timer = media = shown = null;
+        toast = call = timer = media = shownPrimary = shownSecondary = null;
         callKey = timerKey = null;
         userExpanded = false;
+        forced = -1;
     }
 
     // ------------------------------------------------------------- notificações
 
-    @Override public void onNotificationPosted(StatusBarNotification sbn) {
-        handle(sbn, true);
-    }
+    @Override public void onNotificationPosted(StatusBarNotification sbn) { handle(sbn, true); }
 
     @Override public void onNotificationRemoved(StatusBarNotification sbn) {
         String k = sbn.getKey();
@@ -141,6 +142,7 @@ public class IslandService extends NotificationListenerService {
             call = make(Content.CALL, sbn, t, x);
             callKey = sbn.getKey();
             if (toast != null && toast.type == Content.CALL) toast = null;
+            if (isNew) forced = -1;
             if (isNew && fresh && !chrono) {       // chamada tocando: expande por alguns segundos
                 setToast(call, 8000);
             } else {
@@ -149,8 +151,10 @@ public class IslandService extends NotificationListenerService {
             return;
         }
         if (!isCall && ongoing && chrono) {
+            boolean isNew = !sbn.getKey().equals(timerKey);
             timer = make(Content.TIMER, sbn, t, x);
             timerKey = sbn.getKey();
+            if (isNew) forced = -1;
             render();
             return;
         }
@@ -166,9 +170,7 @@ public class IslandService extends NotificationListenerService {
         c.key = sbn.getKey();
         c.title = TextUtils.isEmpty(t) ? x : t;
         c.text = TextUtils.isEmpty(t) ? null : x;
-        if (TextUtils.isEmpty(c.title)) {
-            c.title = type == Content.CALL ? "Chamada" : "Timer";
-        }
+        if (TextUtils.isEmpty(c.title)) c.title = type == Content.CALL ? "Chamada" : "Timer";
         c.tap = n.contentIntent;
         c.when = n.when;
         c.chrono = n.extras.getBoolean(Notification.EXTRA_SHOW_CHRONOMETER, false);
@@ -176,6 +178,24 @@ public class IslandService extends NotificationListenerService {
         if (type == Content.TOAST) {
             try { c.icon = getPackageManager().getApplicationIcon(sbn.getPackageName()); }
             catch (Exception ignored) { }
+        } else if (type == Content.CALL) {
+            c.tint = 0xFF2E7D32;
+            try {
+                Icon li = n.getLargeIcon();
+                if (li != null) c.icon = li.loadDrawable(this);
+            } catch (Exception ignored) { }
+            if (n.actions != null) {
+                for (Notification.Action a : n.actions) {
+                    String ttl = a.title == null ? "" : a.title.toString().toLowerCase(Locale.ROOT);
+                    if (ttl.contains("desligar") || ttl.contains("encerrar") || ttl.contains("hang")
+                            || ttl.contains("end") || ttl.contains("decline") || ttl.contains("recusar")) {
+                        c.hangup = a.actionIntent;
+                    } else if (ttl.contains("viva") || ttl.contains("alto") || ttl.contains("speaker")) {
+                        c.speaker = a.actionIntent;
+                    }
+                }
+                if (c.hangup == null && n.actions.length == 1) c.hangup = n.actions[0].actionIntent;
+            }
         }
         return c;
     }
@@ -230,12 +250,27 @@ public class IslandService extends NotificationListenerService {
                 Bitmap b = m.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART);
                 if (b == null) b = m.getBitmap(MediaMetadata.METADATA_KEY_ART);
                 if (b == null) b = m.getBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON);
-                if (b != null) c.icon = new BitmapDrawable(getResources(), b);
+                if (b != null) {
+                    c.icon = new BitmapDrawable(getResources(), b);
+                    c.tint = avg(b);
+                }
                 c.tap = mc.getSessionActivity();
+                c.duration = m.getLong(MediaMetadata.METADATA_KEY_DURATION);
+                c.position = s.getPosition();
+                c.posTime = s.getLastPositionUpdateTime();
+                c.speed = s.getPlaybackSpeed();
             }
         }
         media = c;
         render();
+    }
+
+    private static int avg(Bitmap b) {
+        try {
+            return Bitmap.createScaledBitmap(b, 1, 1, true).getPixel(0, 0) | 0xFF000000;
+        } catch (Exception e) {
+            return 0xFF3A3A3A;
+        }
     }
 
     void mediaPrev() {
@@ -260,6 +295,28 @@ public class IslandService extends NotificationListenerService {
         bump();
     }
 
+    void mediaSeek(float frac) {
+        if (mc != null && media != null && media.duration > 0) {
+            mc.getTransportControls().seekTo((long) (frac * media.duration));
+        }
+        bump();
+    }
+
+    // ------------------------------------------------------------------ ligação
+
+    void callHangup() {
+        if (call != null && call.hangup != null) {
+            try { call.hangup.send(); } catch (Exception ignored) { }
+        }
+    }
+
+    void callSpeaker() {
+        if (call != null && call.speaker != null) {
+            try { call.speaker.send(); } catch (Exception ignored) { }
+        }
+        bump();
+    }
+
     // ------------------------------------------------------------------ toques
 
     void onCompactTap() {
@@ -268,8 +325,16 @@ public class IslandService extends NotificationListenerService {
         render();
     }
 
+    void onBubbleTap() {
+        if (shownSecondary == null) return;
+        forced = shownSecondary.type;     // a bolinha vira a principal
+        userExpanded = true;
+        bump();
+        render();
+    }
+
     void onExpandedTap() {
-        Content c = shown;
+        Content c = shownPrimary;
         if (c != null && c.tap != null) {
             try { c.tap.send(); } catch (Exception ignored) { }
         }
@@ -300,18 +365,48 @@ public class IslandService extends NotificationListenerService {
 
     // ------------------------------------------------------------------ render
 
-    private Content persistent() {
+    private void validateForced() {
+        if (forced == Content.MEDIA && (media == null || (!media.playing && !userExpanded))) forced = -1;
+        if (forced == Content.CALL && call == null) forced = -1;
+        if (forced == Content.TIMER && timer == null) forced = -1;
+    }
+
+    private Content pickPrimary() {
+        if (forced == Content.MEDIA) return media;
+        if (forced == Content.CALL) return call;
+        if (forced == Content.TIMER) return timer;
         if (call != null) return call;
         if (timer != null) return timer;
-        if (media != null && (media.playing || userExpanded)) return media;
+        if (media != null && media.playing) return media;
+        return null;
+    }
+
+    private Content pickSecondary(Content p) {
+        if (p == null) return null;
+        Content[] order = {call, timer, media != null && media.playing ? media : null};
+        for (Content c : order) {
+            if (c != null && c != p) return c;
+        }
         return null;
     }
 
     private void render() {
-        Content c = toast != null ? toast : persistent();
-        if (c == null) {
-            shown = null;
+        Content p, sec;
+        int target;
+        if (toast != null) {
+            p = toast;
+            sec = null;
+            target = IslandView.ST_EXPANDED;
+        } else {
+            validateForced();
+            p = pickPrimary();
+            sec = pickSecondary(p);
+            target = userExpanded ? IslandView.ST_EXPANDED : IslandView.ST_COMPACT;
+        }
+        if (p == null) {
+            shownPrimary = shownSecondary = null;
             userExpanded = false;
+            forced = -1;
             handler.removeCallbacks(tick);
             handler.removeCallbacks(collapseTask);
             if (view != null) view.hide();
@@ -321,10 +416,13 @@ public class IslandService extends NotificationListenerService {
         if (view == null || !view.isActive()) {
             view = new IslandView(this, getSharedPreferences("p", MODE_PRIVATE));
         }
-        shown = c;
-        view.show(c, (toast != null || userExpanded) ? IslandView.ST_EXPANDED : IslandView.ST_COMPACT);
+        shownPrimary = p;
+        shownSecondary = sec;
+        view.show(p, sec, target);
         handler.removeCallbacks(tick);
-        if (c.type == Content.CALL || c.type == Content.TIMER) tick.run();
+        boolean needTick = p.type == Content.CALL || p.type == Content.TIMER
+                || (p.type == Content.MEDIA && target == IslandView.ST_EXPANDED);
+        if (needTick) tick.run();
     }
 
     private String timeText(Content c) {

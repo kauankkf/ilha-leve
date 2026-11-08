@@ -1,2 +1,2 @@
-Ilha Leve v2 - animação saindo da câmera, forma compacta/expandida, música, ligação e timer.
-Gerar APK: GitHub -> Actions -> Build APK. Desinstale a versão anterior antes de instalar (a assinatura muda a cada build).
+Ilha Leve v3 - estilo HyperOS: pilula + bolinha (chamada/musica), cartoes expandidos, animacao saindo da camera.
+Gerar APK: GitHub -> Actions -> Build APK. Desinstale a versao anterior antes de instalar (a assinatura muda a cada build).
